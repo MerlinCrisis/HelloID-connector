@@ -1,0 +1,33 @@
+[
+  {
+    "key": "baseUrl",
+    "type": "input",
+    "defaultValue": "https://customer-domain.crisissuite.com",
+    "templateOptions": {
+      "label": "url",
+      "placeholder": "Please enter the url to the CrisisSuite environment",
+      "required": true
+    }
+  },
+  {
+    "key": "token",
+    "type": "input",
+    "defaultValue": "",
+    "templateOptions": {
+      "label": "Application token",
+      "type": "password",
+      "placeholder": "Please enter the application token",
+      "required": true
+    }
+  },
+  {
+    "key": "apiVersion",
+    "type": "input",
+    "defaultValue": "21",
+    "templateOptions": {
+      "label": "API version",
+      "placeholder": "Please enter the CrisisSuite API version",
+      "required": true
+    }
+  },
+]
