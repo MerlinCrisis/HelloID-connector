@@ -1,11 +1,9 @@
 #####################################################
 # HelloID-connector
-# PowerShell V2
+# PowerShell V2 (Update)
 #####################################################
 
 # region Development
-# This bit is added to make testing of the code easier in development. It should
-# not give issues in prod. But if it does, just remove this section.
 [CmdletBinding()]
 param()
 
@@ -22,15 +20,15 @@ if (-not $outputContext) {
 if (-not $actionContext) {
 	$personData = @{
 		external_reference = "1002"
-		first_name = "Pietje"
+		first_name = "PietjeUpdate"
 		initials = "P.P."
 		gender = "M"
 		insertion = ""
 		last_name = "Puk"
 		communication_details = @(
 			@{
-				type = "E" 
-				value = "pietje@puk.nl"
+				type = "E"
+				value = "pietje_update@puk.nl"
 			}
 		)
 	}
@@ -52,7 +50,6 @@ if (-not $actionContext) {
 }
 #endregion
 
-
 #region functions
 function Set-AuthorizationHeaders {
     param (
@@ -60,7 +57,6 @@ function Set-AuthorizationHeaders {
         [string]
         $Token
     )
-    # Set authentication headers
     $authHeaders = @{}
     $authHeaders["Authorization"] = "Token $Token"
     $authHeaders["Accept"] = "application/json; charset=utf-8"
@@ -128,8 +124,6 @@ function Get-PersonByCorrelationAttribute {
         [String]
         $CorrelationField
     )
-
-    # Lookup value is filled in, lookup value in CrisisSuite
     $splatParams = @{
         Uri     = "$baseUrl/api/v$ApiVersion/organisation/people/?$($CorrelationField)=$($CorrelationValue)&sync_source=HelloID"
         Method  = 'GET'
@@ -137,17 +131,13 @@ function Get-PersonByCorrelationAttribute {
     }
     $responseGet = Invoke-CrisisSuiteRestMethod @splatParams
 
-    # Check if only one result is returned
     if ([string]::IsNullOrEmpty($responseGet) -or $responseGet.count -eq 0) {
-        # no results found
         Write-Output $null
     }
     elseif ($responseGet.count -eq 1) {
-        # one record found, correlate, return user
         write-output $responseGet.results
     }
     else {
-        # Multiple records found, correlation
         $outputContext.AuditLogs.Add([PSCustomObject]@{
                 Message = "Multiple [$($responseGet.Count)] people found with $CorrelationField =  $($CorrelationValue)"
                 IsError = $true
@@ -155,12 +145,12 @@ function Get-PersonByCorrelationAttribute {
     }
 }
 
-function New-Person {
+function Update-Person {
     param (
         [ValidateNotNullOrEmpty()]
         [string]
         $BaseUrl,
-		
+
         [ValidateNotNullOrEmpty()]
         [string]
         $ApiVersion,
@@ -170,16 +160,20 @@ function New-Person {
 
         [ValidateNotNullOrEmpty()]
         [Object]
+        $PersonId,
+
+        [ValidateNotNullOrEmpty()]
+        [Object]
         $Data
     )
 
-    Write-Verbose "Creating person"
+    Write-Verbose "Updating person"
 
 	$Data.Add("sync_source", "HelloID")
-	
+
     $splatParams = @{
-        Uri     = "$BaseUrl/api/v$ApiVersion/organisation/people/"
-        Method  = 'POST'
+        Uri     = "$BaseUrl/api/v$ApiVersion/organisation/people/$PersonId/"
+        Method  = 'PUT'
         Headers = $Headers
         Body    = $Data | ConvertTo-Json -Depth 5
     }
@@ -191,130 +185,89 @@ function New-Person {
 #region correlation
 try {
     $action = 'Process'
-    
-    # Setup authentication headers
+
     $splatParamsAuthorizationHeaders = @{
         Token = $actionContext.Configuration.token
     }
     $authHeaders = Set-AuthorizationHeaders @splatParamsAuthorizationHeaders
 
-    # Check if we should try to correlate the account
     if ($actionContext.CorrelationConfiguration.Enabled) {
         $correlationField = $actionContext.CorrelationConfiguration.accountField
         $correlationValue = $actionContext.CorrelationConfiguration.accountFieldValue
 
-        if ([string]::IsNullOrEmpty($correlationField)) {
-            Write-Warning "Correlation is enabled but not configured correctly."
+        if ([string]::IsNullOrEmpty($correlationField) -or [string]::IsNullOrEmpty($correlationValue)) {
             Throw "Correlation is enabled but not configured correctly."
         }
 
-        if ([string]::IsNullOrEmpty($correlationValue)) {
-            Write-Warning "The correlation value for [$correlationField] is empty. This is likely a scripting issue."
-            Throw "The correlation value for [$correlationField] is empty. This is likely a scripting issue."
-        }
-
-        # get person
         $splatParamsPerson = @{
             correlationValue = $correlationValue
             correlationField = $correlationField
             Headers          = $authHeaders
             BaseUrl          = $actionContext.Configuration.baseUrl
 			ApiVersion       = $actionContext.Configuration.apiVersion
-            PersonType       = 'person'
         }
         $Person = Get-PersonByCorrelationAttribute @splatParamsPerson
     }
     else {
         Throw "Configuration of correlation is mandatory."
     }
-    #endregion correlation
-	
-    #region Calulate action
+#endregion correlation
+
+#region Calculate action
     if (-Not([string]::IsNullOrEmpty($Person))) {
-        $action = 'Correlate'
-    }    
-    else {
-        $action = 'Create' 
+        $action = 'Update'
     }
-	
+    else {
+        Throw "Person not found, cannot perform update."
+    }
+
     Write-Verbose "Check if current person can be found. Result: $action"
-    #endregion Calulate action
+#endregion Calculate action
 
     switch ($action) {
-        'Create' {   
-		
+        'Update' {
+            $personId = $Person.id
 			$data = $actionContext.Data
-			
-            #region write
-            Write-Verbose "Creating person for:"
-			$data | Out-String | Write-Verbose
-			
-            $splatParamsPersonNew = @{
-                Headers = $authHeaders
-                BaseUrl = $actionContext.Configuration.baseUrl
-                ApiVersion = $actionContext.Configuration.apiVersion
-				Data = $data
+
+            Write-Verbose "Updating person with id [$($personId)]"
+
+            $splatParamsPersonUpdate = @{
+                Headers   = $authHeaders
+                BaseUrl   = $actionContext.Configuration.baseUrl
+                ApiVersion= $actionContext.Configuration.apiVersion
+				PersonId  = $personId
+				Data      = $data
             }
 
             if (-Not($actionContext.DryRun -eq $true)) {
-                $Person = New-Person @splatParamsPersonNew
+                $Person = Update-Person @splatParamsPersonUpdate
 
-                Write-Information "Person with id [$($Person.id)] and dynamicName [($($Person.dynamicName))] successfully created"
+                Write-Information "Person with id [$($Person.id)] and dynamicName [($($Person.dynamicName))] successfully updated"
 
                 $outputContext.AuditLogs.Add([PSCustomObject]@{
-                        Message = "Person with id [$($Person.id)] and dynamicName [($($Person.dynamicName))] successfully created"
+                        Message = "Person with id [$($Person.id)] and dynamicName [($($Person.dynamicName))] successfully updated"
                         IsError = $false
                     })
             }
             else {
-                Write-Warning "DryRun would create person. Person: $($data | Convertto-json)"
+                Write-Warning "DryRun would update person. Person: $($data | Convertto-json)"
             }
 
             $outputContext.AccountReference = $Person.id
             $outputContext.Data = $Person
 
-
             break
-            #endregion Write
-        }
-        
-        'Correlate' {
-            #region correlate
-            Write-Information "Person with id [$($Person.id)] and dynamicName [$($Person.full_name)] successfully correlated on field [$($correlationField)] with value [$($correlationValue)]"
-
-            $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Action  = "CorrelateAccount"
-                    Message = "Person with id [$($Person.id)] and name [($($Person.full_name))] successfully correlated on field [$($correlationField)] with value [$($correlationValue)]"
-                    IsError = $false
-                })
-
-            $outputContext.AccountReference = $Person.id
-            $outputContext.AccountCorrelated = $true
-            $outputContext.Data = $Person
-			Write-Verbose "Person: $($Person | Convertto-json)"
-            
-            break
-            #endregion correlate
         }
     }
 }
 catch {
     $ex = $PSItem
-    if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
-        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-
-        if (-Not [string]::IsNullOrEmpty($ex.ErrorDetails.Message)) {
-            $errorMessage = "Could not $action person. Error: $($ex.ErrorDetails.Message)"
-        }
-        else {
-            $errorMessage = "Could not $action person. Error: $($ex.Exception.Message)"
-        }
-    }
-    else {
-        $errorMessage = "Could not $action person. Error: $($ex.Exception.Message) $($ex.ScriptStackTrace)"
+    $errorMessage = if ($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException' -or $ex.Exception.GetType().FullName -eq 'System.Net.WebException') {
+        "Could not $action person. Error: $($ex.ErrorDetails.Message)"
+    } else {
+        "Could not $action person. Error: $($ex.Exception.Message) $($ex.ScriptStackTrace)"
     }
 
-    # Only log when there are no lookup values, as these generate their own audit message
     if (-Not($ex.Exception.Message -eq 'Error(s) occured while looking up required values')) {
         $outputContext.AuditLogs.Add([PSCustomObject]@{
                 Message = $errorMessage
@@ -323,12 +276,10 @@ catch {
     }
 }
 finally {
-    # Check if auditLogs contains errors, if no errors are found, set success to true
     if ($outputContext.AuditLogs.IsError -notContains $true) {
         $outputContext.Success = $true
     }
 
-    # Check if accountreference is set, if not set, set this with default value as this must contain a value
     if ([String]::IsNullOrEmpty($outputContext.AccountReference) -and $actionContext.DryRun -eq $true) {
         $outputContext.AccountReference = "DryRun: Currently not available"
     }
